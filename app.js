@@ -4,8 +4,6 @@ const STORAGE = 'clearcue-gh-pages-v1';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const MODEL_RE = /^gemini-(?:\d+(?:\.\d+)?-(?:flash|pro)(?:-[a-z0-9.-]+)?|flash(?:-lite)?-latest|pro-latest)$/;
 const EXCLUDED = ['audio', 'tts', 'image', 'live', 'embedding', 'robotics', 'computer-use', 'deep-research', 'custom'];
-const STT_PREF = ['gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-preview'];
-
 const state = {
   mode: 'interview', status: 'idle', source: 'browser', context: [], answers: [], summary: '', image: null,
   config: { model: '', budget_usd: 3, input_rate: 0.4, output_rate: 1.6 },
@@ -190,10 +188,27 @@ async function listModels() {
   throw Error("Gemini's model list exceeded the supported pagination limit.");
 }
 
-function pickSttModel() {
-  for (const c of STT_PREF) if (supportedModel(c) && state.connection.answer_models.includes(c)) return c;
-  for (const c of STT_PREF) if (supportedModel(c)) return c;
-  return state.config.model || state.connection.answer_models[0];
+function sttCandidateModels() {
+  const connected = (state.connection.answer_models || []).filter(supportedModel);
+  if (!connected.length) {
+    const selected = state.config.model;
+    return selected && supportedModel(selected) ? [selected] : [];
+  }
+  const rank = name => {
+    if (name === state.config.model) return 0;
+    if (name.includes('flash-lite')) return 1;
+    if (name.includes('flash')) return 2;
+    if (name.includes('pro')) return 4;
+    return 3;
+  };
+  return [...connected].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+function sttGenerationConfig(model) {
+  const generationConfig = { candidateCount: 1, maxOutputTokens: 384, temperature: 0, responseMimeType: 'text/plain' };
+  const version = model.match(/^gemini-(\d+)/);
+  if (version && Number(version[1]) >= 3) generationConfig.thinkingConfig = { thinkingLevel: 'MINIMAL', includeThoughts: false };
+  else if (model.startsWith('gemini-2.5-')) generationConfig.thinkingConfig = { thinkingBudget: 0, includeThoughts: false };
+  return generationConfig;
 }
 function applyUsage(tokens) {
   if (!tokens) return;
@@ -221,19 +236,13 @@ function bytesToBase64(bytes) {
   for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
   return btoa(binary);
 }
-async function transcribeWavBase64(b64) {
-  const model = pickSttModel();
-  if (!supportedModel(model)) throw Error('Choose a supported Gemini model for cloud transcription.');
-  const generationConfig = { candidateCount: 1, maxOutputTokens: 384, temperature: 0, responseMimeType: 'text/plain' };
-  const version = model.match(/^gemini-(\d+)/);
-  if (version && Number(version[1]) >= 3) generationConfig.thinkingConfig = { thinkingLevel: 'MINIMAL', includeThoughts: false };
-  else if (model.startsWith('gemini-2.5-')) generationConfig.thinkingConfig = { thinkingBudget: 0, includeThoughts: false };
+async function transcribeWithModel(b64, model) {
   const payload = {
     contents: [{ role: 'user', parts: [
       { text: 'Transcribe the attached meeting audio verbatim as plain text only. Do not translate, summarize, label speakers, or add commentary. If there is no intelligible speech, return an empty response.' },
       { inlineData: { mimeType: 'audio/wav', data: b64 } }
     ]}],
-    generationConfig
+    generationConfig: sttGenerationConfig(model)
   };
   const r = await geminiFetch(`/models/${model}:generateContent`, { method: 'POST', body: payload });
   const event = await r.json();
@@ -250,6 +259,22 @@ async function transcribeWavBase64(b64) {
   if (['(no speech)', '[no speech]', 'no speech', 'silence', '(silence)'].includes(transcript.toLowerCase())) transcript = '';
   applyUsage(parseUsage(event.usageMetadata));
   return transcript;
+}
+async function transcribeWavBase64(b64) {
+  const models = sttCandidateModels();
+  if (!models.length) throw Error('Connect Gemini and choose an answer model before starting a live session.');
+  let lastError = null;
+  for (const model of models) {
+    try {
+      return await transcribeWithModel(b64, model);
+    } catch (err) {
+      lastError = err;
+      // Skip unavailable/denied model ids and try the next connected model.
+      if (/unavailable|404|denied access|rejected the key or request|Choose a supported/i.test(err.message)) continue;
+      throw err;
+    }
+  }
+  throw lastError || Error('No connected Gemini model could transcribe this audio. Reconnect to refresh the model list.');
 }
 
 function buildAnswerPayload(question, detail) {

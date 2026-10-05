@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClearCue · GitHub Pages</title>
+<link rel="stylesheet" href="./style.css">
+<script src="./app.js" defer></script>
+</head>
+<body>
+<div class="shell">
+ <aside class="sidebar">
+  <a class="brand" href="#session" aria-label="ClearCue home"><span class="brand-mark">c<span>↗</span></span>ClearCue</a>
+  <div class="workspace-label">GITHUB PAGES</div>
+  <nav aria-label="Main navigation">
+   <button class="nav active" data-page="session"><span>◉</span> Session studio</button>
+   <button class="nav" data-page="profile"><span>▤</span> My profile <span id="profile-dot" class="nav-dot"></span></button>
+   <button class="nav" data-page="history"><span>◷</span> Session library</button>
+   <button class="nav" data-page="settings"><span>⚙</span> AI & settings</button>
+  </nav>
+  <div class="sidebar-note"><div class="little-stars">✦</div><strong>Hosted on GitHub.<br>AI in your browser.</strong><p>Your Gemini key stays in this browser. No Python server required.</p></div>
+  <div class="budget-card"><div class="row between"><span>Estimated spend</span><span id="budget-label">$0.00 / $3</span></div><div class="budget-track"><div id="budget-progress"></div></div><small id="budget-note">Estimate only · billed by Google AI Studio.</small></div>
+  <div class="local-footer"><span class="status-dot"></span><span>Static web app<small>Gemini cloud when connected</small></span></div>
+ </aside>
+ <main>
+  <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> <b id="page-title">Session studio</b></div><div class="row"><span id="server-status" class="connection"><i class="status-dot"></i> GitHub Pages ready</span><button class="button subtle small" id="key-status">Connect AI <span>↗</span></button></div></header>
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <section id="page-session" class="page">
+   <div class="page-heading"><div><p class="eyebrow">LISTEN. THINK. RESPOND.</p><h1>Your next conversation,<br><span>with clarity.</span></h1><p class="subtitle">Browser-hosted ClearCue. Live transcript and instant Gemini answers.</p></div><div class="session-meta"><span id="session-status" class="pill">Ready when you are</span><div id="session-clock">00:00</div><small id="session-caption">Type a question or start a conversation</small></div></div>
+   <div class="mode-picker" role="group" aria-label="Session mode">
+    <button class="mode-card selected" data-mode="interview" aria-pressed="true"><span class="mode-icon">◌</span><span><strong>Live interview</strong><small>Answers grounded in your experience</small></span><i>✓</i></button>
+    <button class="mode-card" data-mode="coding" aria-pressed="false"><span class="mode-icon code">&lt;/&gt;</span><span><strong>Coding interview</strong><small>Reasoning, code & the edge cases</small></span><i>✓</i></button>
+    <button class="mode-card" data-mode="meeting" aria-pressed="false"><span class="mode-icon">▥</span><span><strong>Professional meeting</strong><small>Clear replies & useful next steps</small></span><i>✓</i></button>
+   </div>
+   <div class="setup-strip"><div class="row"><span class="file-icon">▤</span><div><strong id="profile-name">Add your experience</strong><small id="profile-summary">Paste a résumé to personalize answers.</small></div></div><button class="button subtle small" data-page="profile">Review profile <span>→</span></button></div>
+   <div class="session-setup panel">
+    <div class="setup-fields">
+     <label>Session title<input id="session-title" placeholder="e.g. Product team · weekly planning" maxlength="120"></label>
+     <label>Audio source<select id="audio-source"><option value="browser">Browser meeting tab</option><option value="mic">Microphone only</option></select></label>
+     <label class="mic-choice"><input id="include-mic" type="checkbox" checked> Include my microphone</label>
+    </div>
+    <div class="row between setup-bottom">
+     <div class="audio-indicators">
+      <span><i id="meeting-led"></i> Meeting <meter id="meeting-level" min="0" max="1" value="0" aria-label="Meeting audio level"></meter></span>
+      <span><i id="mic-led"></i> Microphone <meter id="mic-level" min="0" max="1" value="0" aria-label="Microphone audio level"></meter></span>
+     </div>
+     <div class="row">
+      <button id="audio-test" class="button subtle">Check audio</button>
+      <button id="start" class="button primary">Start session <span>→</span></button>
+      <button id="pause" class="button" hidden>Pause</button>
+      <button id="stop" class="button danger" hidden>Stop</button>
+     </div>
+    </div>
+    <p id="source-help" class="microcopy">Choose the meeting tab and enable Share tab audio. Answers appear automatically after questions.</p>
+   </div>
+   <div class="studio-grid">
+    <section class="panel transcript-panel">
+     <div class="panel-heading"><div class="row"><span class="panel-icon">≋</span><h2>Conversation</h2><span id="turn-count" class="count">0</span></div><span class="pill neutral">Live transcript</span></div>
+     <p id="live-listen-status" class="live-listen-status" hidden></p>
+     <div id="transcript" class="transcript-feed" aria-label="Conversation transcript"><div class="empty-state"><div class="empty-orbit">≋</div><h3>Every good answer starts<br>with listening.</h3><p>Your conversation will appear here.</p></div></div>
+     <form id="question-form" class="question-composer">
+      <label for="typed-question">Ask a question</label>
+      <textarea id="typed-question" maxlength="5000" rows="3" required placeholder="Type the question you want help answering…"></textarea>
+      <div class="question-composer-footer"><p class="microcopy">Uses your saved résumé and conversation. Ctrl+Enter to send.</p><button id="ask-question" type="submit" class="button primary">Get answer</button></div>
+     </form>
+    </section>
+    <section class="panel answer-panel">
+     <div class="panel-heading"><div class="row"><span class="spark">✦</span><h2>Your next answer</h2></div><span class="pill neutral">Live &amp; typed</span></div>
+     <div class="answer-toolbar"><span id="answer-mode-label" class="pill neutral">Gemini · résumé + conversation</span><label class="toggle-label"><input id="auto-scroll" type="checkbox" checked><span class="switch"></span>Auto-scroll</label></div>
+     <div id="answers" class="answer-feed" aria-label="Suggested answers"><div class="empty-state answer-empty"><div class="answer-art"><span>✦</span><i></i><i></i><i></i></div><h3>A clear thought,<br>right when you need it.</h3><p>Type a question or start an audio session.</p></div></div>
+     <button id="jump-latest" class="jump" hidden>↓ Jump to latest</button>
+     <div class="answer-actions"><button id="regenerate" class="button">↻ Generate again</button><button id="expand" class="button subtle">Expand</button><span id="latency" class="microcopy"></span></div>
+    </section>
+   </div>
+   <details id="coding-context" class="panel coding-context"><summary>Code & visual context <span>Optional</span></summary>
+    <div class="coding-fields">
+     <label>Programming language<select id="code-language"><option>Python</option><option>JavaScript</option><option>TypeScript</option><option>Java</option><option>C++</option><option>C#</option><option>SQL</option><option>Other</option></select></label>
+     <label>Your code or problem statement<textarea id="code-input" rows="5" maxlength="18000" placeholder="Paste code or a problem statement."></textarea></label>
+     <div id="screenshot-control" class="row"><label class="button file-button">Attach screenshot<input id="screenshot-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></label><span id="screenshot-label" class="microcopy">PNG, JPEG or WebP · max 3 MB</span><button id="remove-screenshot" class="button subtle small" hidden>Remove</button></div>
+    </div>
+   </details>
+   <div id="review-actions" class="review-actions" hidden>
+    <div><strong>Keep the useful parts.</strong><p>Save this session in your browser, or export a text copy.</p></div>
+    <div class="row"><button id="make-summary" class="button">Generate summary</button><button id="save-session" class="button primary">Save session</button><button id="export-session" class="button">Export</button><button id="discard-session" class="button subtle">Discard</button></div>
+   </div>
+   <div id="session-summary" class="panel summary-box" hidden></div>
+   <footer class="page-footer"><span>AI suggestions can be mistaken. Review personal facts before using them.</span><span id="privacy-label">Key in this browser · audio & text go to Gemini.</span></footer>
+  </section>
+
+  <section id="page-profile" class="page" hidden>
+   <div class="page-heading compact"><div><p class="eyebrow">YOUR STORY</p><h1>A little background.<br><span>A more relevant answer.</span></h1></div></div>
+   <div class="profile-grid">
+    <div class="panel profile-editor">
+     <div class="panel-heading"><h2>Your résumé</h2><span class="pill neutral">Browser storage</span></div>
+     <div class="profile-fields">
+      <label>Profile name<input id="resume-name" placeholder="e.g. Naveen · software engineering" maxlength="100"></label>
+      <label>Review and edit your experience<textarea id="resume-text" rows="15" maxlength="12000" placeholder="Paste your résumé text here."></textarea></label>
+      <div class="row between"><small id="profile-chars">0 / 12,000 characters</small><div class="row"><button id="delete-profile" class="button subtle danger">Delete</button><button id="save-profile" class="button primary">Save profile</button></div></div>
+     </div>
+    </div>
+    <aside class="panel profile-guide"><span class="spark large">✦</span><h2>You’re the source of truth.</h2><p>This profile is stored in your browser and sent with Gemini answer requests.</p></aside>
+   </div>
+  </section>
+
+  <section id="page-history" class="page" hidden>
+   <div class="page-heading compact"><div><p class="eyebrow">SESSION LIBRARY</p><h1>Saved conversations</h1><p class="subtitle">Stored only in this browser.</p></div></div>
+   <div id="history-list" class="history-list"></div>
+   <div id="history-detail" class="panel history-detail" hidden></div>
+  </section>
+
+  <section id="page-settings" class="page" hidden>
+   <div class="page-heading compact"><div><p class="eyebrow">CONNECTION</p><h1>Your Gemini key.<br><span>Your browser.</span></h1><p class="subtitle">No backend. Connect Gemini API directly from this page.</p></div></div>
+   <form id="settings-form" class="settings-grid">
+    <section class="panel settings-card">
+     <div class="panel-heading"><h2>AI connection</h2><span id="provider-badge" class="pill neutral">Google Gemini</span></div>
+     <label><span id="key-label">Gemini API key</span><input id="api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="Enter a key to connect or replace it"></label>
+     <p class="microcopy" id="key-help">Stored in this browser’s localStorage only. Never sent to GitHub Pages itself.</p>
+     <div class="row connection-actions"><button type="button" id="connect-ai" class="button primary">Connect &amp; load models</button></div>
+     <div class="two-col">
+      <label>Answer model<select id="model" required disabled><option value="">Connect to load models</option></select></label>
+      <label>Transcription<select id="transcription-model" required disabled><option value="gemini-cloud">Gemini cloud speech</option></select></label>
+     </div>
+     <p id="model-help" class="microcopy">Connect first to load model choices.</p>
+     <div id="gemini-info" class="google-setup">
+      <strong>Gemini answers + cloud speech</strong>
+      <p>Create a key in <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio ↗</a>. For browser use, the key must allow the Generative Language API and not be restricted to server IPs only.</p>
+      <p id="speech-status" class="microcopy">Meeting audio is sent to Gemini for transcription. Answers use your selected model.</p>
+     </div>
+     <div class="row"><button id="save-settings" type="submit" class="button primary" disabled>Save settings</button><button type="button" id="clear-key" class="button subtle danger">Remove saved key</button></div>
+    </section>
+    <section id="cloud-budget" class="panel settings-card">
+     <div class="panel-heading"><h2>Estimated spending limit</h2><span class="pill neutral">USD</span></div>
+     <label>Budget ($)<input id="budget" type="number" min="0.01" step="0.01" value="3" required></label>
+     <div class="price-fields">
+      <label>Input · $ / million tokens<input id="input-rate" type="number" min="0.000001" step="any" value="0.4" required></label>
+      <label>Output · $ / million tokens<input id="output-rate" type="number" min="0.000001" step="any" value="1.6" required></label>
+     </div>
+     <p class="microcopy">Local estimate only. Google’s bill may differ.</p>
+    </section>
+    <section class="panel settings-card privacy-card">
+     <h2>Privacy</h2>
+     <p>This site is static on GitHub Pages. Your Gemini API key, résumé, and session history stay in this browser. Audio and prompt text are sent directly from your browser to Google Gemini.</p>
+    </section>
+   </form>
+  </section>
+ </main>
+</div>
+<dialog id="edit-dialog"><form method="dialog"><div class="panel-heading"><h2>Correct the question</h2><button class="button subtle" value="cancel" aria-label="Close">×</button></div><label>What was actually asked?<textarea id="edit-text" rows="5" maxlength="5000"></textarea></label><div class="row end"><button class="button" value="cancel">Cancel</button><button class="button primary" value="save">Save correction</button></div></form></dialog>
+<dialog id="confirm-dialog"><form method="dialog"><h2 id="confirm-title">Confirm</h2><p id="confirm-text"></p><div class="row end"><button class="button" value="cancel">Cancel</button><button class="button danger" value="confirm">Confirm</button></div></form></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

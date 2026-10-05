@@ -1,13 +1,20 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const APP_VERSION = '20261005-stt3';
 const STORAGE = 'clearcue-gh-pages-v1';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const MODEL_RE = /^gemini-(?:\d+(?:\.\d+)?-(?:flash|pro)(?:-[a-z0-9.-]+)?|flash(?:-lite)?-latest|pro-latest)$/;
 const EXCLUDED = ['audio', 'tts', 'image', 'live', 'embedding', 'robotics', 'computer-use', 'deep-research', 'custom'];
+// Prefer these ids when present in the connected listModels result (multimodal flash first).
+const STT_PREF = [
+  'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3-flash', 'gemini-flash-latest',
+  'gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-2.0-flash',
+  'gemini-2.0-flash-lite', 'gemini-3.8-flash-lite', 'gemini-3.5-flash-lite'
+];
 const state = {
   mode: 'interview', status: 'idle', source: 'browser', context: [], answers: [], summary: '', image: null,
   config: { model: '', budget_usd: 3, input_rate: 0.4, output_rate: 1.6 },
-  connection: { connected: false, answer_models: [] },
+  connection: { connected: false, answer_models: [], modelsLoadedAt: 0 },
   usage: { spent: 0, reserved: 0 }, profile: {}, history: [],
   started: 0, elapsed: 0, epoch: 0, saved: false, generating: false, apiKey: ''
 };
@@ -90,7 +97,16 @@ function showProfile() {
 function hasActiveKey() { return !!state.apiKey; }
 function connectionLabel() { return state.connection.connected ? 'Gemini connected ↗' : hasActiveKey() ? 'Verify connection ↗' : 'Connect AI ↗'; }
 function connectLabel() { return state.connection.connected ? 'Refresh connection & models' : 'Connect & load models'; }
-function supportedModel(name) { return typeof name === 'string' && name.length <= 100 && MODEL_RE.test(name) && !EXCLUDED.some(x => name.includes(x)); }
+function normalizeModelId(name) {
+  if (typeof name !== 'string') return '';
+  name = name.trim();
+  if (name.startsWith('models/')) name = name.slice(7);
+  return name;
+}
+function supportedModel(name) {
+  name = normalizeModelId(name);
+  return !!name && name.length <= 100 && MODEL_RE.test(name) && !EXCLUDED.some(x => name.includes(x));
+}
 function modelOptions(models, selected) {
   const el = $('model');
   el.replaceChildren();
@@ -134,8 +150,13 @@ function loadStore() {
     if (Array.isArray(data.history)) state.history = data.history;
     if (data.usage) state.usage = data.usage;
     if (Array.isArray(data.answer_models) && data.answer_models.length && state.apiKey) {
-      state.connection = { connected: true, answer_models: data.answer_models.filter(supportedModel) };
+      state.connection = {
+        connected: true,
+        answer_models: data.answer_models.map(normalizeModelId).filter(supportedModel),
+        modelsLoadedAt: Number(data.modelsLoadedAt) || 0
+      };
     }
+    if (state.config.model) state.config.model = normalizeModelId(state.config.model);
   } catch { /* ignore corrupt store */ }
 }
 function saveStore() {
@@ -145,25 +166,47 @@ function saveStore() {
     profile: state.profile,
     history: state.history.slice(0, 40),
     usage: state.usage,
-    answer_models: state.connection.answer_models
+    answer_models: state.connection.answer_models,
+    modelsLoadedAt: state.connection.modelsLoadedAt || 0
   }));
 }
 
-function geminiError(status) {
-  return ({
+function geminiError(status, detail) {
+  const base = ({
     400: 'Gemini rejected the key or request. Check key restrictions and the selected model.',
     401: 'Gemini rejected this API key.',
     403: 'Gemini denied access. Check the API key, project permissions, and regional availability.',
     404: 'This Gemini model is unavailable. Reconnect to refresh the model list.',
     429: "Gemini's quota or rate limit was reached. Check your Google AI Studio project."
   })[status] || 'Gemini could not complete the request. Try again later.';
+  if (detail && /not found|not supported|unavailable|does not support|invalid model/i.test(detail)) {
+    return status === 404 ? base : (base + ' (' + String(detail).slice(0, 160) + ')');
+  }
+  return base;
+}
+function isRetryableSttFailure(err) {
+  if (!err) return false;
+  if (err.status === 404 || err.status === 400) return true;
+  return /unavailable|404|not found|not supported|does not support|denied access|rejected the key or request|Choose a supported|invalid model|thinking/i.test(String(err.message || ''));
 }
 async function geminiFetch(path, { method = 'GET', body, signal, stream = false } = {}) {
   if (!state.apiKey) throw Error('Connect your Gemini API key first.');
   const headers = { 'x-goog-api-key': state.apiKey, Accept: stream ? 'text/event-stream' : 'application/json' };
   if (body !== undefined) { headers['Content-Type'] = 'application/json'; }
-  const r = await fetch(API_BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
-  if (!r.ok) throw Error(geminiError(r.status));
+  let r;
+  try {
+    r = await fetch(API_BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
+  } catch {
+    throw Error('Could not reach Gemini from this browser. Check network access and that the API key allows browser/HTTP-referrer use.');
+  }
+  if (!r.ok) {
+    let detail = '';
+    try { detail = String((await r.json())?.error?.message || ''); } catch { /* ignore */ }
+    const err = Error(geminiError(r.status, detail));
+    err.status = r.status;
+    err.detail = detail;
+    throw err;
+  }
   return r;
 }
 async function listModels() {
@@ -175,9 +218,8 @@ async function listModels() {
     const r = await geminiFetch('/models?' + q.toString());
     const result = await r.json();
     for (const row of result.models || []) {
-      let name = row?.name || '';
-      if (!name.startsWith('models/')) continue;
-      name = name.slice(7);
+      const name = normalizeModelId(row?.name || '');
+      if (!name) continue;
       if (supportedModel(name) && (row.supportedGenerationMethods || []).includes('generateContent')) names.add(name);
     }
     token = result.nextPageToken || '';
@@ -188,27 +230,50 @@ async function listModels() {
   throw Error("Gemini's model list exceeded the supported pagination limit.");
 }
 
-function sttCandidateModels() {
-  const connected = (state.connection.answer_models || []).filter(supportedModel);
-  if (!connected.length) {
-    const selected = state.config.model;
-    return selected && supportedModel(selected) ? [selected] : [];
-  }
-  const rank = name => {
-    if (name === state.config.model) return 0;
-    if (name.includes('flash-lite')) return 1;
-    if (name.includes('flash')) return 2;
-    if (name.includes('pro')) return 4;
-    return 3;
-  };
-  return [...connected].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+/** Build STT candidates only from successfully listed generateContent models. */
+function buildSttCandidates(listedModels, selectedModel) {
+  const listed = [...new Set((listedModels || []).map(normalizeModelId).filter(supportedModel))];
+  if (!listed.length) return [];
+  const selected = normalizeModelId(selectedModel);
+  const out = [];
+  const push = name => { if (name && listed.includes(name) && !out.includes(name)) out.push(name); };
+  for (const pref of STT_PREF) push(pref);
+  // Prefer other flash / flash-lite variants from the live list before pro models.
+  const rest = listed.slice().sort((a, b) => {
+    const rank = name => {
+      if (name === selected && name.includes('flash')) return 0;
+      if (name.includes('flash-lite')) return 1;
+      if (name.includes('flash')) return 2;
+      if (name === selected) return 3;
+      if (name.includes('pro')) return 5;
+      return 4;
+    };
+    return rank(a) - rank(b) || a.localeCompare(b);
+  });
+  for (const name of rest) push(name);
+  return out.slice(0, 8);
 }
-function sttGenerationConfig(model) {
-  const generationConfig = { candidateCount: 1, maxOutputTokens: 384, temperature: 0, responseMimeType: 'text/plain' };
-  const version = model.match(/^gemini-(\d+)/);
-  if (version && Number(version[1]) >= 3) generationConfig.thinkingConfig = { thinkingLevel: 'MINIMAL', includeThoughts: false };
-  else if (model.startsWith('gemini-2.5-')) generationConfig.thinkingConfig = { thinkingBudget: 0, includeThoughts: false };
-  return generationConfig;
+function sttCandidateModels() {
+  return buildSttCandidates(state.connection.answer_models, state.config.model);
+}
+function sttGenerationConfig() {
+  // Keep STT config minimal: thinking settings differ by model family and have caused hard failures.
+  return { candidateCount: 1, maxOutputTokens: 384, temperature: 0 };
+}
+async function ensureModelsLoaded(force = false) {
+  if (!state.apiKey) throw Error('Connect your Gemini API key first.');
+  const age = Date.now() - (state.connection.modelsLoadedAt || 0);
+  const have = (state.connection.answer_models || []).filter(supportedModel);
+  if (!force && state.connection.connected && have.length && age < 30 * 60 * 1000) return have;
+  const models = await listModels();
+  if (!models.length) throw Error('No compatible Gemini answer models were returned for this key.');
+  state.connection = { connected: true, answer_models: models, modelsLoadedAt: Date.now() };
+  if (!models.includes(normalizeModelId(state.config.model))) {
+    state.config.model = models.find(m => m.includes('flash') && !m.includes('pro')) || models[0];
+  }
+  saveStore();
+  showConfig();
+  return models;
 }
 function applyUsage(tokens) {
   if (!tokens) return;
@@ -237,12 +302,14 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 async function transcribeWithModel(b64, model) {
+  model = normalizeModelId(model);
+  if (!supportedModel(model)) throw Error('Choose a supported Gemini model for cloud transcription.');
   const payload = {
     contents: [{ role: 'user', parts: [
       { text: 'Transcribe the attached meeting audio verbatim as plain text only. Do not translate, summarize, label speakers, or add commentary. If there is no intelligible speech, return an empty response.' },
       { inlineData: { mimeType: 'audio/wav', data: b64 } }
     ]}],
-    generationConfig: sttGenerationConfig(model)
+    generationConfig: sttGenerationConfig()
   };
   const r = await geminiFetch(`/models/${model}:generateContent`, { method: 'POST', body: payload });
   const event = await r.json();
@@ -261,20 +328,29 @@ async function transcribeWithModel(b64, model) {
   return transcript;
 }
 async function transcribeWavBase64(b64) {
-  const models = sttCandidateModels();
-  if (!models.length) throw Error('Connect Gemini and choose an answer model before starting a live session.');
+  await ensureModelsLoaded(false);
+  let models = sttCandidateModels();
+  if (!models.length) {
+    await ensureModelsLoaded(true);
+    models = sttCandidateModels();
+  }
+  if (!models.length) throw Error('Connect Gemini and load models before starting a live session.');
+  const tried = [];
   let lastError = null;
   for (const model of models) {
+    tried.push(model);
     try {
       return await transcribeWithModel(b64, model);
     } catch (err) {
       lastError = err;
-      // Skip unavailable/denied model ids and try the next connected model.
-      if (/unavailable|404|denied access|rejected the key or request|Choose a supported/i.test(err.message)) continue;
+      if (isRetryableSttFailure(err)) continue;
       throw err;
     }
   }
-  throw lastError || Error('No connected Gemini model could transcribe this audio. Reconnect to refresh the model list.');
+  throw Error(
+    'Transcription failed for every connected Gemini model tried (' + tried.join(', ') + '). '
+    + (lastError?.message || 'Reconnect to refresh the model list.')
+  );
 }
 
 function buildAnswerPayload(question, detail) {
@@ -408,12 +484,8 @@ $('connect-ai').onclick = safely(async () => {
     const typed = $('api-key').value.trim();
     if (typed) state.apiKey = typed;
     if (!state.apiKey) throw Error('Enter a Gemini API key first.');
-    const models = await listModels();
-    if (!models.length) throw Error('No compatible Gemini answer models were returned for this key.');
-    state.connection = { connected: true, answer_models: models };
-    if (!models.includes(state.config.model)) state.config.model = models.find(m => m.includes('flash')) || models[0];
+    await ensureModelsLoaded(true);
     $('api-key').value = '';
-    saveStore(); showConfig();
     toast('Connected. Available models have been loaded.');
     $('server-status').innerHTML = '<i class="status-dot"></i> Gemini connected';
   } finally {
@@ -436,7 +508,7 @@ $('clear-key').onclick = safely(async () => {
   if (['active', 'paused'].includes(state.status) || state.generating) throw Error('Stop the current session before removing its API key.');
   if (!await confirmAction('Remove the saved Gemini key?', 'This removes the key from this browser only.')) return;
   state.apiKey = '';
-  state.connection = { connected: false, answer_models: [] };
+  state.connection = { connected: false, answer_models: [], modelsLoadedAt: 0 };
   $('api-key').value = '';
   saveStore(); showConfig();
   $('server-status').innerHTML = '<i class="status-dot"></i> GitHub Pages ready';
@@ -486,9 +558,12 @@ function emptyFeeds() {
 $('start').onclick = safely(async () => {
   if (state.context.length && !state.saved && ['stopped', 'text'].includes(state.status) && !await confirmAction('Start a new session?', 'This clears the unsaved session. Save or export it first if you want to keep it.')) return;
   notice('');
-  if (!state.connection.connected || !hasActiveKey()) { navigate('settings'); throw Error('Connect Gemini and select a model before starting.'); }
+  if (!hasActiveKey()) { navigate('settings'); throw Error('Connect Gemini and select a model before starting.'); }
   $('start').disabled = true;
   try {
+    setLiveStatus('Refreshing Gemini models…');
+    await ensureModelsLoaded(false);
+    if (!sttCandidateModels().length) throw Error('Connect Gemini and load models before starting a live session.');
     cancelGeneration(); await stopAudio();
     state.epoch++; state.context = []; state.answers = []; state.summary = ''; state.saved = false; pendingAutoQuestion = '';
     state.status = 'active'; state.started = Date.now(); state.elapsed = 0;
@@ -781,7 +856,7 @@ async function listenStream(stream, speaker) {
   const ac = new AudioContext({ sampleRate: 48000 });
   const resource = { stream, ac, node: null };
   audioResources.push(resource);
-  const workletUrl = new URL('pcm-worklet.js', location.href).href;
+  const workletUrl = new URL('pcm-worklet.js?v=' + APP_VERSION, location.href).href;
   await ac.audioWorklet.addModule(workletUrl);
   await ac.resume();
   const src = ac.createMediaStreamSource(stream), node = new AudioWorkletNode(ac, 'clearcue-pcm'), silent = ac.createGain();
